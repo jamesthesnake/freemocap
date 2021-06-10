@@ -14,8 +14,11 @@ from rich.progress import track
 
 def CalibrateCaptureVolume(session,board):
     
-    calVideoFrameLength = 60
-    createCalibrationVideos(session,calVideoFrameLength)
+    #calVideoFrameLength = 60
+    calVideoTime = 32 #time in seconds
+
+    if len(os.listdir(session.calVidPath)) == 0:
+        createCalibrationVideos(session,calVideoTime)
 
     vidnames = [] 
     cam_names = [] 
@@ -44,28 +47,28 @@ def CalibrateCaptureVolume(session,board):
     """Takes as input a list of list of video filenames, one list of each camera.
     Also takes a board which specifies what should be detected in the videos"""
 
-    all_rows = cgroup.get_rows_videos(vidnames, board, verbose=True)
+    #all_rows = cgroup.get_rows_videos(vidnames, board, verbose=True)
 
-    cgroup.set_camera_sizes_videos(vidnames)
+    #cgroup.set_camera_sizes_videos(vidnames)
 
-    if session.debug:
-        fig = plt.figure(47290)
-        for camNum in range(len(all_rows)):
-            ax = fig.add_subplot(2,2,camNum+1)
-            # cap = cv2.VideoCapture(vidnames[camNum][0]) #this is crazy inefficient - we should save out the first image somewhere and save it in an accessible location
-            # ret, frame = cap.read()
-            # plt.imshow(frame)
-            # cap.release()
-            for frNum in range(len(all_rows[camNum])):
-                corners = np.squeeze(all_rows[camNum][frNum]['filled'])
-                plt.plot(corners[:,0], corners[:,1],'.-')
-            # xmin = np.nanmin(corners[:,0])*.9
-            # xmax = np.nanmax(corners[:,0])*1.1
-            # ymin = np.nanmin(corners[:,1])*.9
-            # ymax = np.nanmax(corners[:,1])*1.1
-            # ax.set_xlim(xmin, xmax)
-            # ax.set_xlim(ymin, ymax)
-        plt.show()
+    # if session.debug:
+    #     fig = plt.figure(47290)
+    #     for camNum in range(len(all_rows)):
+    #         ax = fig.add_subplot(2,2,camNum+1)
+    #         # cap = cv2.VideoCapture(vidnames[camNum][0]) #this is crazy inefficient - we should save out the first image somewhere and save it in an accessible location
+    #         # ret, frame = cap.read()
+    #         # plt.imshow(frame)
+    #         # cap.release()
+    #         for frNum in range(len(all_rows[camNum])):
+    #             corners = np.squeeze(all_rows[camNum][frNum]['filled'])
+    #             plt.plot(corners[:,0], corners[:,1],'.-')
+    #         # xmin = np.nanmin(corners[:,0])*.9
+    #         # xmax = np.nanmax(corners[:,0])*1.1
+    #         # ymin = np.nanmin(corners[:,1])*.9
+    #         # ymax = np.nanmax(corners[:,1])*1.1
+    #         # ax.set_xlim(xmin, xmax)
+    #         ax.set_xlim(ymin, ymax)
+    #     plt.show()
 
 
 
@@ -89,7 +92,7 @@ def CalibrateCaptureVolume(session,board):
 
 
     session.cgroup = cgroup
-    n_frames= 40
+    n_frames= 3808
     startframe = 0
     n_trackedPoints = 24
     framelist = range(startframe,startframe+n_frames)
@@ -104,7 +107,7 @@ def CalibrateCaptureVolume(session,board):
             try:
                 charucoarray[cam][count] = data[frame][cam]['filled']
             except: 
-                print('failed frame:', frame)
+                #print('failed frame:', frame)
                 continue
     charuco_nCams_nFrames_nImgPts_XY = np.squeeze(np.array(charucoarray))
     
@@ -171,8 +174,11 @@ def CalibrateCaptureVolume(session,board):
     np.save(path_to_charuco_array, mean_charuco_fr_mar_dim)
     return cgroup,mean_charuco_fr_mar_dim
 
-def createCalibrationVideos(session,calVideoFrameLength):
+def createCalibrationVideos(session,calVideoTime):
     vidList = os.listdir(session.syncedVidPath)
+    cap = cv2.VideoCapture(str(session.syncedVidPath/vidList[0])) 
+    framerate = int(cap.get(cv2.CAP_PROP_FPS))
+    calVideoFrameLength = framerate*calVideoTime
     framelist = list(range(calVideoFrameLength))
     codec = 'DIVX'
     for count,vid in enumerate(vidList,start=1):
@@ -192,9 +198,24 @@ def createCalibrationVideos(session,calVideoFrameLength):
         
         out = cv2.VideoWriter(saveCalVidPath, fourcc, framerate, (resWidth,resHeight))
         print('Trimming ' + cam_name)
-        for frame in track(framelist):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame) #set the video to the frame that we need
+        
+        
+        #for frame in track(framelist):
+        #    cap.set(cv2.CAP_PROP_POS_FRAMES, frame) #set the video to the frame that we need
+        #    success, image = cap.read()
+        #    out.write(image)
+
+        startframe = framelist[0]
+        currentframe = startframe
+        endframe = framelist[-1]
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, startframe) #set the video to the frame that we need
+        while currentframe<=endframe:
             success, image = cap.read()
             out.write(image)
+            currentframe += 1
+
+
+
         cap.release()
         out.release()

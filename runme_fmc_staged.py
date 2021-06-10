@@ -10,8 +10,8 @@ import numpy as np
 sesh = session.Session()
 
 
-sesh.useOpenPose= True
-sesh.useMediaPipe = True
+sesh.useOpenPose= False
+sesh.useMediaPipe = False
 sesh.useDLC=False
 
 if sesh.useDLC: 
@@ -21,10 +21,10 @@ if sesh.useDLC:
 
 
 # %% Inputs to edit
-stage = 4 #set your starting stage here (stage = 1 will run the pipeline from webcams)
-sesh.debug = False
+stage = 3 #set your starting stage here (stage = 1 will run the pipeline from webcams)
+sesh.debug = True
 
-sesh.sessionID = '' #fill in if you are running from Stage 2 onwards
+sesh.sessionID = 'CyrWheel' #fill in if you are running from Stage 2 onwards
 if not sesh.sessionID:
     dataFolder = Path.cwd()/'Data'
     subfolders = [ f.path for f in os.scandir(dataFolder) if f.is_dir() ] #copy-pasta from who knows where

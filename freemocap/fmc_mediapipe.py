@@ -23,7 +23,7 @@ def runMediaPipe(session, dummyRun=False):
     with mp_holistic.Holistic() as holistic:
         eachCamerasData = [] #Create an empty list that holds each cameras data
         for thisVidPath in session.syncedVidPath.iterdir():  #Run MediaPipe 'Holistic' (body, hands, face) tracker on each video in the raw video folder
-            if thisVidPath.suffix =='.mp4': #NOTE - at some point we should build some list of 'synced video names' and check against that 
+            if thisVidPath.suffix =='.MP4': #NOTE - at some point we should build some list of 'synced video names' and check against that 
                 
                 vidPath = session.mediaPipeDataPath / thisVidPath.stem
                 jsonPath = vidPath / 'json'
