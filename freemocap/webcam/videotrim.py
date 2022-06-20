@@ -6,6 +6,10 @@ import os
 
 
 def VideoTrim(session, vidList, ft, parameterDictionary, rotationState, numCamRange):
+    """ 
+    From the list of saved frames from the time-syncing function, create synced videos by pulling those specific 
+    frames from the original raw videos into new videos, replacing any duplicate frames with a black 'buffer' slide
+    """  
     camList = list(
         ft.columns[1 : len(vidList) + 1]
     )  # grab the camera identifiers from the data frame
@@ -18,10 +22,12 @@ def VideoTrim(session, vidList, ft, parameterDictionary, rotationState, numCamRa
     postTrimmingTotalNumFrames = []
 
     for vid,cam,camNum in zip(vidList,camList,numCamRange): #iterate in parallel through camera identifiers and matching videos
-        print('Editing '+cam+' from ' +vid)
-        cap = cv2.VideoCapture(str(session.rawVidPath/vid)) #initialize OpenCV capture
+        this_vid_path = session.rawVidPath/vid
+        print('synchronizing video at - ' + str(this_vid_path))
+        cap = cv2.VideoCapture(str(this_vid_path)) #initialize OpenCV capture
         frameTable = ft[cam] #grab the frames needed for that camera
         success, image = cap.read() #start reading frames
+        prev_image=image.copy()
         fourcc = cv2.VideoWriter_fourcc(*codec)
         saveName = session.sessionID + "_synced_" + cam + ".mp4"
 
@@ -46,18 +52,18 @@ def VideoTrim(session, vidList, ft, parameterDictionary, rotationState, numCamRa
                         blankFrame, angle=rotationState[camNum]
                     )
                     blankFrame = cv2.resize(blankFrame, (resWidth, resHeight))
-                out.write(blankFrame)  # write that frame to the video
+                out.write(prev_image)  # write that frame to the video
                 count += 1
             else:
                 cap.set(
                     cv2.CAP_PROP_POS_FRAMES, frame
                 )  # set the video to the frame that we need
-                success, image = cap.read()
+                success, image = cap.read()                
                 if rotationState[camNum] is not None:
                     image = imutils.rotate_bound(image, angle=rotationState[camNum])
                     image = cv2.resize(image, (resWidth, resHeight))
                 out.write(image)
-                f = 2
+                prev_image=image.copy()
             
         resWidth = trueWidth
         resHeight = trueHeight
@@ -75,6 +81,7 @@ def VideoTrim(session, vidList, ft, parameterDictionary, rotationState, numCamRa
 
 
 def createCalibrationVideos(session,calVideoFrameLength,parameterDictionary):
+
     vidList = os.listdir(session.syncedVidPath)
     framelist = list(range(calVideoFrameLength))
     codec = parameterDictionary.get("codec")

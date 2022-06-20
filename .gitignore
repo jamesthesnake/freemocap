@@ -1,4 +1,5 @@
 # Byte-compiled / optimized / DLL files
+.idea/*
 
 __pycache__/
 Data/
@@ -6,6 +7,7 @@ Data/
 *.py[cod]
 *$py.class
 FreeMoCap_Data/
+freemocap\user_preferences.yaml
 
 # C extensions
 *.so
@@ -134,5 +136,15 @@ dmypy.json
 .vscode/launch.json
 
 
-# other
-src/
+update_pip.txt
+freemocap/user_preferences.yaml
+freemocap/fmc_startup/user_preferences.yaml
+
+.obsidian/
+data/
+
+*.avi
+*.mp4
+*.divx
+freemocap_runme_script_jsm.py
+freemocap-ui/threejs_stuff/

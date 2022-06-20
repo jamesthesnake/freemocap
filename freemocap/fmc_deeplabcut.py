@@ -8,7 +8,8 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import yaml
+from ruamel.yaml import YAML
+
 from pathlib import Path
 import h5py
 
@@ -19,7 +20,8 @@ def parseDeepLabCut(
 ):  # NOTE this is assuming both the dlc config file and dlc data h5 foles are in the same folder specified in the session.dlcDataPath, if that is not the case either dlcconfig or h5files variable need to be changed
 
     dlcConfig = config_path # File path for dlcConfig file
-
+    yaml=YAML()
+    
     with open(dlcConfig) as configFile:
         # Open the config file
         configList = yaml.load(configFile, Loader=yaml.FullLoader)
@@ -34,25 +36,27 @@ def parseDeepLabCut(
     numCams = int(session.numCams)  # Get num of cams
     numFrames = session.numFrames + 10  # Get num of frames
 
-    numPoints = len(bodypartList)  # Get amount of points tracked
-    dlcData_nCams_nFrames_nImgPts_XYC = np.ndarray(
-        [numCams, numFrames, numPoints, 3]
-    )  # Create empty array for dlc points
+    numImgPoints = len(bodypartList)  # Get amount of points tracked
+    dlcData_nCams_nFrames_nImgPts_XYC = np.ndarray([numCams, numFrames, numImgPoints, 3])  # Create empty array for dlc points
 
     nn = 0  # counter for each camera
     for data in h5files:  # Loop throuxgh each camera
+
         with h5py.File(data) as f:  # Open each h5 file
             fullDataGroup = f.get("df_with_missing")  # Open main h5 group
-            dataTable = fullDataGroup.get(
-                "table"
-            )  # Open datatable with all DLC tracked points
+            dataTable = fullDataGroup.get("table")  # Open datatable with all DLC tracked points
+
             for ii in range(len(dataTable)):  # Loop through each frame
                 dataFromOneFrame = dataTable[ii]  # Assign frame to varible
                 idx = len(dataFromOneFrame[1]) / 3  # index for reshaping data
-                sortedFrame = np.array(dataFromOneFrame[1])  # Put data in numoy array
-                dlcData_nCams_nFrames_nImgPts_XYC[nn, ii, :, :] = sortedFrame.reshape(
-                    int(idx), 3
-                )  # Reshape the data into the correct form
+                sortedFrame = np.array(dataFromOneFrame[1])  # Put data in numpy array
+                try:
+                    dlcData_nCams_nFrames_nImgPts_XYC[nn, ii, :, :] = sortedFrame.reshape(
+                        int(idx), 3
+                    )  # Reshape the data into the correct form
+                except:
+                    print('If you get an out-of-bounds error here, you may have too many DLC files in the DLCData folder - empty it out and re-run DLC to fix')
+                    #NOTE - we should fix this , i.e. by moving old DLC data to an 'oldDLCData' folder within DLCData if the user tries to run DLC when there are already files in the DLCData folder
         nn += 1
 
     if session.debug:
@@ -94,9 +98,6 @@ def parseDeepLabCut(
 
         plt.show()
 
-    np.save(
-        session.dataArrayPath / "deepLabCutData_2d.npy",
-        dlcData_nCams_nFrames_nImgPts_XYC,
-    )
+
 
     return dlcData_nCams_nFrames_nImgPts_XYC

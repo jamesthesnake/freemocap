@@ -1,128 +1,184 @@
+import os
+import copy
+import json
+import pickle
+import glob 
+from pathlib import Path
+
 from aniposelib.cameras import CameraGroup
 from aniposelib.utils import load_pose2d_fnames
+from numba.core.types.misc import StringLiteral
 import numpy as np
 import cv2
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from freemocap import reconstruct3D, fmc_anipose
-import os
 from rich.progress import track
+from rich import print
+from rich.console import Console
 
+from scipy.spatial.transform import Rotation
 
+console = Console()
 
-def CalibrateCaptureVolume(session,board):
+def pin_camera_zero_to_origin(_anipose_camera_group_object):
+    original_translation_vectors = _anipose_camera_group_object.get_translations()
+    camera_0_translation = original_translation_vectors[0, :]
+    altered_translation_vectors = np.zeros(original_translation_vectors.shape)
+    for this_camera_number in range(original_translation_vectors.shape[0]):
+        altered_translation_vectors[this_camera_number, :] = original_translation_vectors[this_camera_number,
+                                                            :] - camera_0_translation
+
+    _anipose_camera_group_object.set_translations(altered_translation_vectors)
+    print(f"original translation vectors: {original_translation_vectors}")
+    print(f"altered translation vectors: {_anipose_camera_group_object.get_translations()}")
+    return _anipose_camera_group_object
+
+def rotate_cameras_so_camera_zero_aligns_with_XYZ(_anipose_camera_group_object):
+    original_rotations_euler = _anipose_camera_group_object.get_rotations()
+    original_translation_vectors =  _anipose_camera_group_object.get_translations()
+    camera_rotation_matrix_list = [Rotation.from_euler('xyz',original_rotations_euler[this_cam_num,:]).as_matrix()  for this_cam_num in range(original_rotations_euler.shape[0])]
+    
+    rotated_translation_vectors = [camera_rotation_matrix_list[0] @ this_tx for this_tx in original_translation_vectors]
+    _anipose_camera_group_object.set_rotations(rotated_translation_vectors)
+    return _anipose_camera_group_object
+
+def CalibrateCaptureVolume(session,board, calVideoFrameLength = 1):
+    """ 
+    Check if a previous calibration yaml exists, and if not, create a set of shortened calibration videos and run Anipose functions
+    to create a calibration yaml. Takes the 2D charuco board points and reconstructs them into 3D points that are saved out
+    into the DataArrays folder
+
+    note `debugAniposeIter` spoofs a failed anipose calibration to make it easier to test the thing where we iterate through with different frame windows to try to find one that works
+    """  
     
     session.calVidPath.mkdir(exist_ok = True)
     session.dataArrayPath.mkdir(exist_ok = True)
-
-    calVideoFrameLength = 60
-    createCalibrationVideos(session, calVideoFrameLength)
-
-    vidnames = []
-    cam_names = []
-    for count, thisVidPath in enumerate(session.calVidPath.glob("*.mp4"), start=1):
-        vidnames.append([str(thisVidPath)])
-        cam_names.append(str(count))
-        session.numCams = count
-
-    cgroup = fmc_anipose.CameraGroup.from_names(
-        cam_names, fisheye=True
-    )  # Looking through their code... it looks lke the 'fisheye=True' doesn't do much (see 2020-03-29 obsidian note)
-
-    calibrationFile = "{}_calibration.yaml".format(session.sessionID)
-
-    session.cameraCalFilePath = session.sessionPath / calibrationFile
-
-    forceRunCameraExtrinsicsCalibration = True  # set this to True to re-run the camera calibration and saveover the existing config file
-
-    # if not session.cameraCalFilePath.exists() or forceRunCameraExtrinsicsCalibration: #if that config file doesn't exist, run the camera calibration whosists. If it does, then just load the toml
-    ## this will take a few minutes
-    ## it will detect the charuco board in the videos,
-    ## then calibrate the cameras based on the detections, using iterative bundle adjustment
-    # error,all_rows,merged = cgroup.calibrate_videos(vidnames, board) #JSM NOTE - in its original form, this method doesn't throw an error when a video fails to load. This is an easy fix!
-
-    #%% This next bit is a copy-paste of the inner bits of `cgroup.calibrate_videos` - Part 1 of 2
-    """Takes as input a list of list of video filenames, one list of each camera.
-    Also takes a board which specifies what should be detected in the videos"""
-
-    all_rows = cgroup.get_rows_videos(vidnames, board, verbose=True)
-
-    cgroup.set_camera_sizes_videos(vidnames)
-
-    if session.debug:
-        fig = plt.figure(47290)
-        for camNum in range(len(all_rows)):
-            ax = fig.add_subplot(2, 2, camNum + 1)
-            # cap = cv2.VideoCapture(vidnames[camNum][0]) #this is crazy inefficient - we should save out the first image somewhere and save it in an accessible location
-            # ret, frame = cap.read()
-            # plt.imshow(frame)
-            # cap.release()
-            for frNum in range(len(all_rows[camNum])):
-                corners = np.squeeze(all_rows[camNum][frNum]["filled"])
-                plt.plot(corners[:, 0], corners[:, 1], ".-")
-            # xmin = np.nanmin(corners[:,0])*.9
-            # xmax = np.nanmax(corners[:,0])*1.1
-            # ymin = np.nanmin(corners[:,1])*.9
-            # ymax = np.nanmax(corners[:,1])*1.1
-            # ax.set_xlim(xmin, xmax)
-            # ax.set_xlim(ymin, ymax)
-        plt.show()
-
-    #%% This next bit is a copy-paste of the inner bits of `cgroup.calibrate_videos` - Part 2 of 2
-    # error, merged = cgroup.calibrate_rows(all_rows, board,
-    #                            init_intrinsics=True,
-    #                            init_extrinsics=True)
-    #%% End of the copy-paste of the inner bits of `cgroup.calibrate_videos` - END
+    calibrationVideoPath = session.calVidPath
 
 
-    #JSM NOTE - need add method to extract Charuco board points from the calibrate_videos pipeline
-
-        ## if you need to save and load
-        ## example saving and loading for later
-    if not session.cameraCalFilePath.is_file(): 
-        error,merged = cgroup.calibrate_videos(vidnames, board)
-        cgroup.dump(session.cameraCalFilePath) #JSM NOTE  - let's just use .yaml's unless there is some reason to use .toml
-        mergename = session.dataArrayPath/'charuco_2d_points.npy'
-        np.save(mergename,merged)
-    else: 
-        cgroup = CameraGroup.load(session.cameraCalFilePath) #load previous calibration config
+    
+    if session.use_saved_calibration:
+        saved_calibration_folder = session.freemocap_module_path/'fmc_calibration'
+        #saved_calibration_file_name = os.listdir(saved_calibration_folder)[0]
+        #saved_calibration_file_path = os.path.join(saved_calibration_folder, saved_calibration_file_name)
+        #saved_calibration_file_path = list(Path(saved_calibration_folder).glob('*.toml'))
+        saved_calibration_file_path = saved_calibration_folder/'previous_calibration.toml'
 
 
-    session.cgroup = cgroup
-    n_frames = 40
-    startframe = 0
-    n_trackedPoints = 24
-    framelist = range(startframe, startframe + n_frames)
+        cam_names = [i+1 for i in range(session.numCams)]
+        cgroup = fmc_anipose.CameraGroup.from_names( cam_names, fisheye=True)
 
-    charucoarray = np.empty([session.numCams, n_frames, n_trackedPoints, 1, 2])
-    charucoarray[:] = np.nan
 
-    data = np.load(session.dataArrayPath/'charuco_2d_points.npy',allow_pickle = True)
+        cgroup = CameraGroup.load(saved_calibration_file_path)
+        charuco_nCams_nFrames_nImgPts_XY = np.load(saved_calibration_folder/'charuco_2d_points.npy')
 
-    for cam in range(session.numCams):
-        for count, frame in enumerate(framelist):
-            try:
-                charucoarray[cam][count] = data[frame][cam]["filled"]
-            except:
-                print("failed frame:", frame)
-                continue
-    charuco_nCams_nFrames_nImgPts_XY = np.squeeze(np.array(charucoarray))
+        session.cameraCalFilePath = session.sessionPath /"{}_calibration.toml".format(session.sessionID)
+        cgroup.dump(session.cameraCalFilePath) 
+
+        session.cgroup = cgroup 
+
+        camera_calibration_info_dict = cgroup.get_dicts()
+        camera_calibration_pickle_path = session.sessionPath / "{}_calibration.pickle".format(session.sessionID)
+
+        with open(str(camera_calibration_pickle_path), 'wb') as pickle_file:
+            pickle.dump(camera_calibration_info_dict, pickle_file)
+        
+    else:
+
+        if type(calVideoFrameLength)==int or type(calVideoFrameLength)==float:
+            if calVideoFrameLength < 0: # if '-1' use the whole video
+                cal_vid_frame_range = [0, session.numFrames]
+                calibrationVideoPath = session.calVidPath
+            else:
+                if calVideoFrameLength>0 and calVideoFrameLength<=1: #if between 0 and 1, use as a percentage of the total video length
+                    cal_vid_frame_range = [0, round(calVideoFrameLength * session.numFrames)]
+                else: #otherwise, just use the input value as the number of frames to use        
+                    cal_vid_frame_range = [0, calVideoFrameLength]
+        elif type(calVideoFrameLength)==list:
+            if len(calVideoFrameLength) ==2:
+                cal_vid_frame_range = calVideoFrameLength
+
+
+        createCalibrationVideos(session, cal_vid_frame_range)
+
+        vidnames = []
+        cam_names = []
+
+        for count, thisVidPath in enumerate(calibrationVideoPath.glob("*.mp4"), start=1):
+            vidnames.append([str(thisVidPath)])
+            cam_names.append(str(count))
+            session.numCams = count
+
+        
+        cgroup = fmc_anipose.CameraGroup.from_names( cam_names, fisheye=True)  # Looking through their code... it looks lke the 'fisheye=True' doesn't do much (see 2020-03-29 obsidian note)
+
+        calibrationFile = "{}_calibration.toml".format(session.sessionID)
+
+        session.cameraCalFilePath = session.sessionPath / calibrationFile
+
+        error,charuco_data, charuco_frames = cgroup.calibrate_videos(vidnames, board)
+    
+        cgroup = pin_camera_zero_to_origin(cgroup)
+        # cgroup = rotate_cameras_so_camera_zero_aligns_with_XYZ(cgroup)
+        
+
+        cgroup.dump(session.cameraCalFilePath) 
+
+        camera_calibration_info_dict = cgroup.get_dicts()
+        camera_calibration_pickle_path = session.sessionPath / "{}_calibration.pickle".format(session.sessionID)
+        
+        
+        with open(str(camera_calibration_pickle_path), 'wb') as pickle_file:
+            pickle.dump(camera_calibration_info_dict, pickle_file)
+
+
+
+        session.cgroup = cgroup
+        n_frames = cal_vid_frame_range[1]-cal_vid_frame_range[0]
+        startframe = 0
+        n_trackedPoints = 24
+
+        charuco_nCams_nFrames_nImgPts_XY = np.empty([session.numCams, n_frames, n_trackedPoints,  2])
+        charuco_nCams_nFrames_nImgPts_XY[:] = np.nan
+
+        for cam in range(session.numCams):
+            for charCount, thisCharFrame in enumerate(charuco_frames):
+                try:
+                    charuco_nCams_nFrames_nImgPts_XY[cam, thisCharFrame, :,:] = np.squeeze(charuco_data[charCount][cam]["filled"])
+                except:
+                    # print("failed frame:", frame)
+                    continue
+
+        path_to_save_calibration_data = session.freemocap_module_path/'fmc_calibration'/'previous_calibration.toml'
+        path_to_save_charuco_data = session.freemocap_module_path/'fmc_calibration'/'charuco_2d_points.npy'
+        cgroup.dump(path_to_save_calibration_data)
+        np.save(path_to_save_charuco_data,charuco_nCams_nFrames_nImgPts_XY)
+        
+        
+    charuco2d_filename = session.dataArrayPath/'charuco_2d_points.npy'
+    np.save(charuco2d_filename,charuco_nCams_nFrames_nImgPts_XY)
+
+
+
+    
+
 
     session.charuco_nCams_nFrames_nImgPts_XY = charuco_nCams_nFrames_nImgPts_XY
 
-    charuco_fr_mar_dim = reconstruct3D.reconstruct3D(
+    charuco_fr_mar_xyz, charuco_reprojErr= reconstruct3D.reconstruct3D(
         session, charuco_nCams_nFrames_nImgPts_XY
     )
 
-    mean_charuco_fr_mar_dim = np.nanmean(charuco_fr_mar_dim, axis=0)
+    mean_charuco_fr_mar_xyz = np.nanmean(charuco_fr_mar_xyz, axis=0)
 
     # charry_reshaped = charucoarray.reshape(session.numCams, -1, 2)
 
     # char_flat = cgroup.triangulate(charry_reshaped, progress=True)
     # charReprojerr_flat = cgroup.reprojection_error(char_flat, charry_reshaped, mean=True)
 
-    # char_fr_mar_dim = char_flat.reshape(n_frames, n_trackedPoints, 3)
+    # char_fr_mar_xyz = char_flat.reshape(n_frames, n_trackedPoints, 3)
     # charReprojErr_fr_mar_err = charReprojerr_flat.reshape(n_frames, n_trackedPoints)
 
     if session.debug:
@@ -130,9 +186,9 @@ def CalibrateCaptureVolume(session,board):
         # mean charuco position
         ax1 = fig.add_subplot(111, projection="3d")
         ax1.cla()
-        x = mean_charuco_fr_mar_dim[:][:, 0]
-        y = mean_charuco_fr_mar_dim[:][:, 1]
-        z = mean_charuco_fr_mar_dim[:][:, 2]
+        x = mean_charuco_fr_mar_xyz[:][:, 0]
+        y = mean_charuco_fr_mar_xyz[:][:, 1]
+        z = mean_charuco_fr_mar_xyz[:][:, 2]
         mx = np.nanmean(x)
         my = np.nanmean(y)
         mz = np.nanmean(z)
@@ -165,24 +221,35 @@ def CalibrateCaptureVolume(session,board):
         # #charuco points over time
         # ax2 = fig.add_subplot(122)
         # ax2.cla()
-        # numPts = charuco_fr_mar_dim.shape[1]
+        # numPts = charuco_fr_mar_xyz.shape[1]
         # for pp in range(numPts):
-        #     ax2.plot(charuco_fr_mar_dim[:,pp,:])
+        #     ax2.plot(charuco_fr_mar_xyz[:,pp,:])
         # ax2.set_title('Charuco Point positions over time')
         plt.show()
 
-    path_to_charuco_array = session.dataArrayPath/'charuco_3d_points.npy'
-    np.save(path_to_charuco_array, mean_charuco_fr_mar_dim)
-    return cgroup, mean_charuco_fr_mar_dim
+    np.save(session.dataArrayPath/'charuco_3d_points.npy', charuco_fr_mar_xyz)
+    np.save(session.dataArrayPath/'charuco_3d_reprojErr.npy', charuco_reprojErr)
+
+    return cgroup, charuco_fr_mar_xyz
 
 
 def createCalibrationVideos(session, calVideoFrameLength):
-    vidList = os.listdir(session.syncedVidPath)
-    framelist = list(range(calVideoFrameLength))
+    """ 
+    Based on the desired length of the calibration videos (for the anipose functions), create new videos trimmed 
+    to that specific length
+    """  
+    vidList =  glob.glob(str(session.syncedVidPath) + "/*.mp4")
+    if len(calVideoFrameLength)==1:
+        framelist = list(range(calVideoFrameLength))
+    elif len(calVideoFrameLength)==2:
+        framelist = list(range(calVideoFrameLength[0], calVideoFrameLength[1]))
+    else:
+        Exception('calVideoFrameLength must be either 1 or 2 elements long')
+    
     codec = "DIVX"
     for count, vid in enumerate(vidList, start=1):
         cam_name = "Cam{}".format(count)
-        cap = cv2.VideoCapture(str(session.syncedVidPath / vid))
+        cap = cv2.VideoCapture(vid)
         fourcc = cv2.VideoWriter_fourcc(*codec)
 
         # grab resolution parameters from the videos
@@ -200,7 +267,7 @@ def createCalibrationVideos(session, calVideoFrameLength):
         success, image = cap.read()  # start reading frames
 
         out = cv2.VideoWriter(saveCalVidPath, fourcc, framerate, (resWidth, resHeight))
-        print("Trimming " + cam_name)
+        print("Trimming " + cam_name + " to frames {}-{} for Anipose Calibration".format(framelist[0], framelist[-1]))
         for frame in track(framelist):
             cap.set(
                 cv2.CAP_PROP_POS_FRAMES, frame

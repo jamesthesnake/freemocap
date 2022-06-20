@@ -10,6 +10,7 @@ from freemocap.webcam import checkcams
 import pickle
 import datetime
 from pathlib import Path
+import sys
 
 
 class recordGUI:
@@ -17,6 +18,7 @@ class recordGUI:
     # a listbox, and allows you to pick a task for the cameras
     def __init__(self, master):
         self.master = master
+        self.refresh = False 
         # Detect how many inputs you have available
         available_inputs = checkcams.CreateAvailableCamList()
         number_of_cams = len(available_inputs)
@@ -50,7 +52,7 @@ class recordGUI:
 
         # ---create the task radiobutton
         tk.Label(
-            self.master, text="""Choose your task""", justify=tk.LEFT, padx=20
+            self.master, text="""Select 'Setup' to preview cameras \n or \n 'Record' to create recording""", justify=tk.CENTER
         ).pack()
 
         for option, val in options:
@@ -58,15 +60,26 @@ class recordGUI:
                 self.master, text=option, padx=20, variable=self.currentTask, value=val
             ).pack(anchor=tk.W)
 
+        self.refresh_button = Button(bottom_frame, text="Re-detect Cameras", command=self.Refresh)
+        self.refresh_button.pack(side=tk.RIGHT)
+
+        
         self.sub_button = Button(bottom_frame, text="Submit", command=self.Submit)
         self.sub_button.pack(side=tk.RIGHT)
 
+        
     def Submit(self):
         self.taskChoice = self.currentTask.get()
         self.selected = [
             int(self.list_box.get(pos)) for pos in self.list_box.curselection()
         ]
+        self.refresh = False
         self.master.destroy()
+    
+    def Refresh(self):
+        self.refresh = True
+        self.master.destroy()
+
 
 
 class SettingsGUI:
@@ -87,6 +100,7 @@ class SettingsGUI:
         self.sessionID_in = sessionID_in
         self.task = task
         self.currentPath = current_path_to_save
+        self.mediaPipeOverlay = False
         # check if any previous parameters exist
         if self.parameter_dictionary is not None:
             existing_parameters = True
@@ -155,6 +169,11 @@ class SettingsGUI:
         codecLabel = Label(parametersFrame, text="codec").pack(side="left")
         self.codecEntry = Entry(parametersFrame)
         self.codecEntry.pack(side="left")
+        
+        if self.task == "setup":
+            self.var1 = tk.IntVar()
+            c1 = tk.Checkbutton(parametersFrame, text='Mediapipe Overlay',variable=self.var1, onvalue=1, offvalue=0)
+            c1.pack(side = 'right')
 
         # ---SessionID entry- default is the date/time
         if self.task == "record":
@@ -194,7 +213,7 @@ class SettingsGUI:
             self.FPSEntry.insert(0, parameter_dictionary["framerate"])
 
         # ---Submit button to hit when things are finalized
-        self.sub_button = Button(bottomFrame, text="Submit", command=self.Submit)
+        self.sub_button = Button(bottomFrame, text="Submit - Start Cameras", command=self.Submit)
         self.sub_button.pack(side=tk.BOTTOM)
 
     def openFileDialog(self):
@@ -219,6 +238,11 @@ class SettingsGUI:
             "framerate": int(self.FPSEntry.get()),
             "codec": str(self.codecEntry.get()),
         }
+        
+        if self.task == "setup":
+            if self.var1.get()==1:
+                self.mediaPipeOverlay=True
+
         # spit out the sessionID
         if self.task == "record":
             self.sessionID_out = self.sessionIDEntry.get()
@@ -245,12 +269,13 @@ class SettingsGUI:
 class ProceedToRecordGUI:
     def __init__(self, master, sessionID_in, current_path_to_save):
         self.master = master
+        self.restart_setup = False
         self.sessionID_in = sessionID_in
         self.continueToRecording = ""
         self.sessionID_out = ""
         self.currentPath = current_path_to_save
 
-        sessionText = "Proceed to recording with this sessionID?"
+        sessionText = "Proceed to recording? \n sessionID:"
         sessionLabel = Label(master, text=sessionText)
         sessionLabel.pack(side="top")
 
@@ -273,9 +298,11 @@ class ProceedToRecordGUI:
         changepath_button.pack(side = 'left')
 
             # master.title("Proceed to Recording?")
-        self.proceed_button = Button(text="Proceed", command=self.proceed)
+        self.proceed_button = Button(text="Begin Recording!", command=self.proceed)
+        self.change_button = Button(text = "Change Parameters", command = self.change_params)
         self.stop_button = Button(text="Quit", command=self.stop)
         self.stop_button.pack(side=tk.RIGHT)
+        self.change_button.pack(side = tk.LEFT)
         self.proceed_button.pack(side=tk.RIGHT)
 
 
@@ -288,6 +315,14 @@ class ProceedToRecordGUI:
 
     def stop(self):
         self.master.destroy()
+        sys.exit("Quitting Program")
+
+    def change_params(self):
+        self.restart_setup = True
+        self.sessionID_out = self.sessionIDEntry.get()
+        self.save_path = self.currentPath
+        self.master.destroy()
+
 
     def proceed(self):
         self.continueToRecording = True
@@ -296,18 +331,26 @@ class ProceedToRecordGUI:
         self.master.destroy()
 
 
-def RunGUI(sessionID_in, rotation_entry, parameter_entry,current_path_to_save):
+
+def RunChoiceGUI():
 
     # ---Get the camera inputs and the task
-    root = tk.Tk()
-    camera_choice = recordGUI(root)
-    root.mainloop()
+    refresh = True
+    while refresh:            
+        root = tk.Tk()
+        camera_choice = recordGUI(root)
+        root.mainloop()
+        refresh = camera_choice.refresh
 
     cam_inputs = camera_choice.selected
     if not cam_inputs:
         raise ValueError("No camera inputs selected")
     task = camera_choice.taskChoice
 
+    return cam_inputs,task
+
+
+def RunParametersGUI(sessionID_in, rotation_entry, parameter_entry,current_path_to_save,cam_inputs,task):
     # ---Get all the necessary parameters
     root = tk.Tk()
     recording_settings = SettingsGUI(
@@ -327,7 +370,7 @@ def RunGUI(sessionID_in, rotation_entry, parameter_entry,current_path_to_save):
         sessionID = None
         savepath = None
 
-    return task, cam_inputs, recording_settings.rotation_output, paramDict, sessionID,savepath
+    return recording_settings.rotation_output, paramDict, sessionID,savepath, recording_settings.mediaPipeOverlay
 
 
 def RunProceedtoRecordGUI(sessionID_in,current_path_to_save):
@@ -335,4 +378,4 @@ def RunProceedtoRecordGUI(sessionID_in,current_path_to_save):
     goToRecording = ProceedToRecordGUI(root, sessionID_in,current_path_to_save)
     root.mainloop()
 
-    return goToRecording.continueToRecording, goToRecording.sessionID_out, goToRecording.save_path
+    return goToRecording.continueToRecording, goToRecording.restart_setup,goToRecording.sessionID_out, goToRecording.save_path
