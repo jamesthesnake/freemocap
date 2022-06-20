@@ -7,10 +7,20 @@ import tkinter as tk
 from tkinter import Tk, Label, Button, Frame
 
 def TimeSync(session,timeStampData,numCamRange,camNames):    
-       
+    """
+    First creates a master timeline from the average frame length interval across all cameras. Then proceeds to compare timepoints in master timeline
+    to timestamps in each camera and find the closest matching timestamp in a camera to a point on the master timeline and create a list of
+    frame numbers.
+
+    Then loop through the list of frame numbers from each camera. Update counts for missing frames and duplicated frames. Create a table with these counts
+    and plots of statistics related to the recording
+    """     
     def CloseNeighb(camera,point): 
-            closestPoint = (np.abs(camera - point)).argmin() 
-            return closestPoint
+        """ 
+        Find the timestamp in the camera timestamp list that most closely matches the input pointin the master timeline
+        """  
+        closestPoint = (np.abs(camera - point)).argmin() 
+        return closestPoint
 
     # this section auto-finds the start and end points for our master timeline to the nearest second
     masterTimelineBegin = np.ceil(max(timeStampData.iloc[0]))
@@ -61,7 +71,8 @@ def TimeSync(session,timeStampData,numCamRange,camNames):
     
     frameList = masterTimeline #start a list of frames, with the first row being our master timeline
     timeList = masterTimeline #start a list of timestamps,with the first row being our master timeline
-     
+    
+    unix_converted_timeList = range(len(masterTimeline)) #keep a record of unix timestamps before they're normalized to fit the master timeline
     delNum= []; #stores number of deleted frames/camera
     bufNum= []; #stores number of buffered frames/camera
     bufPercentList = []; #stores percentage of deleted frames/camera
@@ -75,6 +86,7 @@ def TimeSync(session,timeStampData,numCamRange,camNames):
     for y in numCamRange:
         thisCam = timeStampData[camNames[y]]
         camTimes = []
+        original_camTimes = []
         # stored times
         camFrames = []
         # stored frames
@@ -94,10 +106,18 @@ def TimeSync(session,timeStampData,numCamRange,camNames):
         frameList = np.column_stack((frameList,camFrames)) #update our framelist with our new frames
         timeList = np.column_stack((timeList,camTimes)) #update our timelist 
         
+        original_camTimes = camTimes - timeDif
+        if session.get_synced_unix_timestamps == True: #this is bad coding please forgive me - 
+            unix_converted_original_camTimes = original_camTimes + session.beginTime
+            unix_converted_timeList = np.column_stack((unix_converted_timeList,unix_converted_original_camTimes))
+        else:
+            unix_converted_original_camTimes = original_camTimes 
+            unix_converted_timeList = np.column_stack((unix_converted_timeList,unix_converted_original_camTimes))
+
     
         #start counters for the number of buffered and deleted slides
-        bufCount = 0;
-        delCount = 0;
+        bufCount = 0
+        delCount = 0
 
         thisCamNumFrames = len(camFrames)
         postSyncTotalNumFrames.append(thisCamNumFrames)
@@ -115,9 +135,11 @@ def TimeSync(session,timeStampData,numCamRange,camNames):
                 if frame1 > frame2:
                     frameList[i, count] = -1
                     timeList[i, count] = -1
+                    unix_converted_timeList[i,count] = -1
                 else:
                     frameList[i + 1, count] = -1
                     timeList[i + 1, count] = -1
+                    unix_converted_timeList[i+1,count] = -1
             elif distanceBetweenFrames > 1:  # deletion
                 delCount += 1
             else:
@@ -148,6 +170,11 @@ def TimeSync(session,timeStampData,numCamRange,camNames):
     frameTable.columns = columnNames
     timeTable = pd.DataFrame(timeList)
     timeTable.columns = columnNames
+
+    unix_synced_timeTable = pd.DataFrame(unix_converted_timeList)
+    unix_synced_table_columnNames = ['Frame'] + camNames
+    unix_synced_timeTable.columns = unix_synced_table_columnNames
+
     totalFrameRate = [round(1 / intvl, 1) for intvl in totalFrameIntvl]
     frameRate = 1 / totalAverageIntvl  # calculates our framerate
     results = {
@@ -187,13 +214,16 @@ def TimeSync(session,timeStampData,numCamRange,camNames):
     fpsFrame.plot.hist(
         ax=d, bins=6, alpha=0.5, xlim=[0, 40], title="Frames per second distribution"
     )
-    return frameTable, timeTable, frameRate, resultTable, fig
+    return frameTable, timeTable, unix_synced_timeTable,frameRate, resultTable, fig
 
 
 # function to trim our videos
 
 
 class proceedGUI:
+    """ 
+    GUI that displays all statistics from recording, and then asks for user input on whether to proceed with the rest of the pipeline
+    """  
     def __init__(self, master, results, figure):
         self.master = master
         self.results = results
@@ -222,3 +252,50 @@ class proceedGUI:
     def destroy(self):
         self.proceed = True
         self.master.destroy()
+
+
+
+
+def time_sync_initialize(session):
+    """
+    Initialize settings specific to the time syncing stage if running stage 2
+    """
+    #from the config settings add the camera input parameters to parameter dictionary
+    session.initialize(stage = 2)
+    session.parameterDictionary = session.session_settings['recording_parameters']['ParameterDict']
+    rotationDict = session.session_settings['recording_parameters']['RotationInputs']
+    session.rotationInputs = list(rotationDict.values())
+    #initialize the path to the timestamp csv
+    csvName = session.sessionID + '_timestamps.csv'
+    csvPath = session.rawVidPath/csvName
+
+    #read CSV data, turn it into a data frame
+    timeStampData = pd.read_csv (csvPath)
+    timeStampData = timeStampData.iloc[:,1:]
+
+    #get the camIDs and number of cameras (numCamRange) from the dataframe
+    camIDs = list(timeStampData.columns)
+    numCams = len(camIDs)
+    numCamRange = range(len(camIDs)) 
+    
+    #create names for each of the raw videos  
+    vidNames = []
+    for x in numCamRange:
+        singleVidName = 'raw_cam{}.mp4'.format(x+1)
+        vidNames.append(singleVidName)    
+
+    if session.get_synced_unix_timestamps == True:
+        unix_timestamp_csvName = session.sessionID + "_unix_timestamps.csv"
+        unixTimeStampDataPath = session.rawVidPath/unix_timestamp_csvName
+        cam_to_search_for_begin_time = camIDs[0] + '_unix_timestamps'
+        unix_timestamp_data = pd.read_csv(unixTimeStampDataPath)
+        unix_timestamp_data = unix_timestamp_data.iloc[:,1:]
+        beginTime = unix_timestamp_data[cam_to_search_for_begin_time][0]
+        session.beginTime = beginTime
+    #initialize all the session variables we'll need to run the rest of the pipeline
+    session.timeStampData = timeStampData
+    session.camIDs = camIDs
+    session.numCamRange = numCamRange
+    session.vidNames = vidNames
+    session.numCams = numCams
+  

@@ -2,6 +2,9 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from freemocap import recordingconfig
+from freemocap.webcam import timesync
+
+import cv2
 
 class Session: #self like "recording self"
     def __init__(self):
@@ -25,16 +28,28 @@ class Session: #self like "recording self"
 
         self.cgroup = None
 
-        self.mean_charuco_fr_mar_dim = None
-        self.skel_fr_mar_dim = None
+        self.mean_charuco_fr_mar_xyz = None
+        self.skel_fr_mar_xyz = None
 
         self.mediaPipe_imgPathList = None
         self.openPose_imgPathList = None
 
     def start_session(self,paramDict,rotDict):
-        #start a session, create all the file paths necessary, and create a session dictionary to save settings
-        dataFolderPath = self.basePath/self.dataFolderName
+        """ 
+        When starting a session from stage 1, create all the file paths necessary, and create a session dictionary to save settings.
+        Calls the create_session_paths and create_session_dictionary function
+        """         
+        #dataFolderPath = self.basePath/self.dataFolderName
+     
+
+        if self.basePath.stem == self.dataFolderName: #don't recursively craete 'FreeMoCap_Data' folders!
+            dataFolderPath = self.basePath
+        else:
+            dataFolderPath = self.basePath/self.dataFolderName
+        
         dataFolderPath.mkdir(exist_ok= True)
+            
+    
 
         self.sessionPath = dataFolderPath/self.sessionID
         self.sessionPath.mkdir(exist_ok=True)
@@ -49,9 +64,10 @@ class Session: #self like "recording self"
 
 
     def create_session_paths(self):
-        #creates Path objects to each folder created in a recording self and adds them all to the pathList variable
-        #folders for these paths are created at the start of each stage where they are needed 
-
+        """ 
+        Creates Path objects to each folder created in a recording self and adds them all to the pathList variable
+        folders for these paths are created at the start of each stage where they are needed 
+        """         
         pathList = []
 
         self.rawVidPath = self.sessionPath/'RawVideos'
@@ -81,7 +97,10 @@ class Session: #self like "recording self"
         return pathList
 
     def create_session_dictionary(self):
-        #creates a dictionary of settings that should be saved into a YAML throughout each self
+        """ 
+        Creates a dictionary of settings that should be saved into a YAML through each session
+        """                
+    
 
         recording_parameters = {'numCams': self.numCams, 'numFrames': self.numFrames, 'numTrackedPoints': self.numTrackedPoints}
 
@@ -99,7 +118,9 @@ class Session: #self like "recording self"
 
 
     def create_session_txt(self,paramDict,rotDict):
-    #create a text file listing recording parameters
+        """ 
+        Create a text file listing recording parameters
+        """    
         parameter_text = self.sessionPath/'sessionSettings.txt' 
         text = open(parameter_text, 'w')
         text.write("Session ID = %s\n" %(self.sessionID))
@@ -108,10 +129,10 @@ class Session: #self like "recording self"
         text.close()
 
     def save_session(self):
-        #save the self settings you want to keep from self to self into a yaml
-        #because some items are not yaml-able, a copy of the sessionDictionary is made and adjusted to be fully yaml-able
-            #Adjustments Made:
-                #pathLib objects are all converted to strings
+        """ 
+        Save the settings needed to rerun the session at a later point into a dictionary, and then save it into a YAML
+        """           
+        
         session_dictionary_to_save = self.session_settings
 
         for key,value in session_dictionary_to_save['session_paths'].items():
@@ -127,6 +148,10 @@ class Session: #self like "recording self"
 
    
     def initialize(self,stage):
+        """ 
+        When starting a session from Stage 3 onwards, modify the current session class instance with all necessary 
+        attributes needed to run the rest of the pipeline 
+        """  
         #load all session settings back into the session class for this run-through of the code
         
         #recordPath = self.basePath/'Data' #create a Data folder in the filepath if none exists yet
@@ -135,21 +160,70 @@ class Session: #self like "recording self"
         self.sessionPath = self.dataFolderPath/self.sessionID
         self.sessionPath.mkdir(exist_ok=True)
 
+
+        
         self.session_yaml_path = self.sessionPath/'{}_config.yaml'.format(self.sessionID)
 
-        if stage == 3:
-            #this is for the case of GoPro recordings/external recordings - if no config file exists, create one
-            if self.session_yaml_path.is_file():
-                self.session_settings = self.load_session()
-            else: 
-                self.start_session({},{})
-        else:
-            self.session_settings = self.load_session()
+        # if stage == 3:
+        #     #this is for the case of GoPro recordings/external recordings - if no config file exists, create one
+        #     if self.session_yaml_path.is_file():
+        #         self.session_settings = self.load_session()
+        #     else: 
+        #         self.start_session({},{})
+        #         #run a check to make sure all the frame numbers are the same 
+        #         a_sync_vid_path = list(self.syncedVidPath.glob('*.mp4'))
+        #         frames_per_cam = {} 
+               
+        #         for vid in a_sync_vid_path:
+        #             temp_cap = cv2.VideoCapture(str(vid))
+        #             thisCamFrames = temp_cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        #             frames_per_cam[str(vid)] = thisCamFrames
+        #         temp_cap.release()
+        #         frame_check = len(list(set(list(frames_per_cam.values())))) == 1 # using set() to remove duplicates and check for values count
+                
+
+        #         if frame_check:
+        #             self.numFrames = int(thisCamFrames)
+        #             self.session_settings['recording_parameters'].update({'numFrames':self.numFrames})
+        #             self.numCams = len(a_sync_vid_path)
+        #         else:
+        #             print('The number of frames in each video are not equal. Frame counts are: ' + frames_per_cam)
+        # else:
+        #     self.session_settings = self.load_session()
+
+        if self.session_yaml_path.is_file():
+            self.session_settings = self.load_session() #if a yaml exists, load it in (this is the case for a webcam recording, or an external recording that's been processed already)
+        else: #if a session yaml doesn't exist, as is the case of an external recording
+            self.start_session({},{})
+            #run a check to make sure all the frame numbers are the same 
+            a_sync_vid_path = list(self.syncedVidPath.glob('*.mp4'))
+            frames_per_cam = {} 
+            
+            for vid in a_sync_vid_path:
+                temp_cap = cv2.VideoCapture(str(vid))
+                thisCamFrames = temp_cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                frames_per_cam[str(vid)] = thisCamFrames
+                temp_cap.release()
+            frame_check = len(list(set(list(frames_per_cam.values())))) == 1 # using set() to remove duplicates and check for values count
+            
+
+            if frame_check:
+                self.numFrames = int(thisCamFrames)
+                self.session_settings['recording_parameters'].update({'numFrames':self.numFrames})
+                self.numCams = len(a_sync_vid_path)
+                self.session_settings['recording_parameters'].update({'numCams':self.numCams})
+                self.save_session()
+            else:
+                raise ValueError('The number of frames in each video are not equal. Frame counts per video are are: ' + str(frames_per_cam))
         
 
 
    
     def load_session(self):
+        """ 
+        Called by the self.initialize function - reads the session yaml and loads the number of cameras and frames, and then 
+        creates all necessary session paths
+        """  
 
         #session_yaml_path = self.sessionPath/'{}_config.yaml'.format(self.sessionID)
         session_yaml = YAML(typ='safe', pure=True)
@@ -183,10 +257,6 @@ class Session: #self like "recording self"
     #     self.dlcDataPath = session_paths['DLCData']
     #     self.imOutPath = session_paths['imOut']
     #     self.dataArrayPath = session_paths['DataArrays']
-
-    def save_user_preferences(self,preferences):
-        preferences_yaml = YAML()
-        preferences_yaml.dump(preferences,self.preferences_path)
 
 
     def save_user_preferences(self,preferences):
